@@ -101,3 +101,6 @@ graph.add_edge("retreive-reddit-post-data", "analyze-bing-result")
 graph.add_edge("analyze-reddit-result", "synthesize-node")
 graph.add_edge("analyze-google-result", "synthesize-node")
 graph.add_edge("analyze-bing-result", "synthesize-node")
+
+graph.add_edge("synthesize-node", END)
+
