@@ -17,6 +17,7 @@ class AgentState(TypedDict):
     google_analysis:str | None
     reddit_analysis: str | None
     bing_analysis : str | None
+    final_result : str | None
 
 
 
@@ -104,3 +105,49 @@ graph.add_edge("analyze-bing-result", "synthesize-node")
 
 graph.add_edge("synthesize-node", END)
 
+app = graph.compile()
+
+
+# =============== > running the chatbot < ===================
+def run_chat_bot():
+    print("Multi-source research agent: ")
+    print("Type 'exit' to quit \n")
+    while True:
+        user_input = input("Ask me anything: ")
+        if user_input.lower() == "exit":
+            break
+
+        initial_state = AgentState(
+            messages=[HumanMessage(content=user_input)],
+            user_input=HumanMessage(content=user_input), 
+            google_result=None, 
+            bing_result=None, 
+            reddit_result=None, 
+            selected_reddit_urls=[], 
+            reddit_post_data=None, 
+            google_analysis=None, 
+            reddit_analysis=None, 
+            bing_analysis=None
+        )
+
+        print("\n Starting parallel reseach process...\n")
+        print("Google search...\n")
+        print("Reddit search...\n")
+        print("Bing search...\n")
+        print("Analyzing results...\n")
+        print("Synthesizing analyses...\n")
+        final_state = app.invoke(initial_state)
+        print("\nResearch completed. Here are the results:\n")
+
+        if final_state['final_result']:
+            print(final_state['final_result'])
+        
+        else:
+            print("No results found. Please try again with a different query.")
+        
+
+        print("\n" + "-"*50 + "\n")
+
+
+if __name__ == "__main__":
+    run_chat_bot()
