@@ -3,8 +3,24 @@ from langgraph.graph import StateGraph, END, START
 from typing import TypedDict, List, Annotated, Sequence
 from langgraph.graph.message import BaseMessage, add_messages
 from dotenv import load_dotenv
-from webscrapping import serp_search
+from pydantic import BaseModel, Field
+from webscrapping import serp_search, reddit_search_api,reddit_post_retrieval
+from langchain_ollama import ChatOllama
+from prompt import (
+    get_google_analysis_messages, 
+    get_bing_analysis_messages, 
+    get_reddit_analysis_messages, 
+    get_synthesis_messages,
+    get_reddit_url_analysis_messages,
+)
+
 load_dotenv()
+
+# calling the llm :
+llm = ChatOllama(
+    model="gemma4:31b-cloud",
+    temperature=0.5,
+)
 
 # Reducer function to handle multiple updates - just returns the latest value
 def last_value(left, right):
@@ -25,6 +41,12 @@ class AgentState(TypedDict):
 
 
 
+class RedditUrlAnanlysis(BaseModel):
+    selected_reddit_urls: List[str] = Field(
+        description="List of selected Reddit post URLs for analysis."
+    )
+
+
 # =============== > defining our nodes that we will need < ===================
 
 # => get user question function
@@ -35,6 +57,7 @@ def get_user_question(state: AgentState) -> str:
 # => Node 1 : google search 
 def google_search(state:AgentState) -> AgentState:
     """ This node is for getting informations from google. """
+
     print("Start Searching From Google")
     user_question = get_user_question(state)
 
@@ -53,8 +76,8 @@ def reddit_search(state:AgentState) -> AgentState:
 
     print("Start Searching From Reddit...")
 
-    reddit_results = None
-
+    reddit_results = reddit_search_api(user_question)
+    print(f"Reddit search results: {reddit_results}")
     state['reddit_results'] = reddit_results
 
     return state
@@ -76,31 +99,151 @@ def bing_search(state:AgentState) -> AgentState:
 
 # => Node 4 : analyze reddit post
 def analyze_reddit_post(state:AgentState) -> AgentState:
+    """this node is for analyzing reddit post and selecting the most relevant urls for the user question."""
+
+    user_question = get_user_question(state)
+
+    reddit_results = state.get('reddit_results')
+
+
+    if not reddit_results:
+        return state
+    
+    structured_llm = llm.with_structured_output(RedditUrlAnanlysis)
+
+    messages = get_reddit_url_analysis_messages(user_question, reddit_results)
+
+
+    try:
+        analysis_result = structured_llm.invoke(messages)
+        selected_urls = analysis_result.selected_urls
+
+        print("Selected Reddit URLs for analysis:")
+        for i, url in enumerate(selected_urls):
+            print(f"Selected Reddit URL {i+1}: {url}")
+    except Exception as e:
+        print(f"Error during Reddit post analysis: {e}")
+        selected_urls = []
+
+    state['selected_reddit_urls'] = selected_urls
     return state
 
 # => Node 5 : analyze google result
 def retreive_data_from_reddit_post(state: AgentState) -> AgentState:
+    """this node is for retrieving data from reddit post."""
+
+    print("Getting reddit post comments...")
+
+    selected_urls = state.get('selected_reddit_urls',[])
+
+    if not selected_urls:
+        return state
+
+    print(f"Processing {len(selected_urls)} posts...")
+
+    reddit_post_data = reddit_post_retrieval(selected_urls)
+
+    if reddit_post_data:
+        print(f"Successfully retreive {reddit_post_data.get('total_comments')} comments.")
+    
+    else:
+        print("Failed to get post data")
+        reddit_post_data = []    
+    
+    state['reddit_post_data'] = reddit_post_data
+
     return state
 
 
 # => Node 6 : analyze google result
 def analyze_google_result(state:AgentState) -> AgentState:
+    """this node is for analyzing google result."""
+    print("Analyzing Google search result...")
+
+    user_question = get_user_question(state)
+
+    google_results = state.get("google_results",[])
+
+    if not google_results:
+        return state
+
+    messages = get_google_analysis_messages(user_question, google_results)
+
+    analysis = llm.invoke(messages)
+
+    state['google_analysis'] = analysis.content
+
     return state
 
 
 # => Node 7 : analyze bing result :
 def analyze_bing_result(state:AgentState) -> AgentState:
+    """this node is for analyzing bing result."""
+
+    print("Analyzing Bing search result...")
+
+    user_question = get_user_question(state)
+
+    bing_results = state.get("bing_results",[])
+
+    if not bing_results:
+        return state
+
+    messages = get_bing_analysis_messages(user_question, bing_results)
+
+    analysis = llm.invoke(messages)
+
+    state['bing_analysis'] = analysis.content
     return state
 
 
 # => Node 8 : analyze reddit result :
 def analyze_reddit_result(state:AgentState) -> AgentState:
+    """this node is for analyzing reddit result."""
+    print("Analyzing Reddit result...")
+
+    user_question = get_user_question(state)
+
+    reddit_results = state.get("reddit_results",[])
+    reddit_post_data = state.get("reddit_post_data",[])
+
+    if not reddit_results:
+        return state
+
+    messages = get_reddit_analysis_messages(user_question, reddit_results, reddit_post_data)
+
+    analysis = llm.invoke(messages)
+
+    state['reddit_analysis'] = analysis.content
     return state
 
 
 # => Node 9 : synthesize analyses node :
 def synthesize_analyses(state:AgentState) -> AgentState:
+    """this node is for synthesizing all analyses."""
+    print("Synthesizing all analyses...")
+
+    user_question = get_user_question(state)
+
+    google_analysis = state.get("google_analysis",[])
+    bing_analysis = state.get("bing_analysis",[])
+    reddit_analysis = state.get("reddit_analysis",[])
+
+    messages = get_synthesis_messages(
+        user_question,
+        google_analysis,
+        bing_analysis,
+        reddit_analysis
+    )
+
+    analysis = llm.invoke(messages)
+
+    state['final_result'] = analysis.content
     return state
+
+    
+
+    
 
 
 # =============== > defining the graph < ===================
