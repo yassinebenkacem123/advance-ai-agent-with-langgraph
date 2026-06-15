@@ -8,5 +8,6 @@ dependencies = [
     "langchain",
     "langgraph",
     "dotenv",
-    "langchain-ollama"
+    "langchain-ollama",
+    "streamlit"
 ]

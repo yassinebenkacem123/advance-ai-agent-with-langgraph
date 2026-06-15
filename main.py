@@ -1,4 +1,4 @@
-from langchain.messages import HumanMessage, ToolMessage,SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, END, START
 from typing import TypedDict, List, Annotated, Sequence
 from langgraph.graph.message import BaseMessage, add_messages
@@ -27,17 +27,21 @@ def last_value(left, right):
     return right if right is not None else left
 
 class AgentState(TypedDict):
-    messages : Annotated[Sequence[BaseMessage], add_messages]
-    google_results: Annotated[List[str] | None, last_value]
-    bing_results : Annotated[List[str] | None, last_value]
-    reddit_results : Annotated[List[str] | None, last_value]
+    messages: Annotated[Sequence[BaseMessage], add_messages]
 
-    selected_reddit_urls: List[str]
-    reddit_post_data:str | None
-    google_analysis:str | None
-    reddit_analysis: str | None
-    bing_analysis : str | None
-    final_result : str | None
+    # Search results — written by 3 parallel branches, so all need a reducer
+    google_results:  Annotated[dict | None, last_value]
+    bing_results:    Annotated[dict | None, last_value]
+    reddit_results:  Annotated[dict | None, last_value]
+
+    # All fields below are also written while parallel branches are still active
+    # (each branch returns the FULL state), so they need reducers too.
+    selected_reddit_urls: Annotated[List[str], last_value]
+    reddit_post_data:     Annotated[dict | None, last_value]
+    google_analysis:      Annotated[str | None, last_value]
+    reddit_analysis:      Annotated[str | None, last_value]
+    bing_analysis:        Annotated[str | None, last_value]
+    final_result:         Annotated[str | None, last_value]
 
 
 
@@ -77,7 +81,6 @@ def reddit_search(state:AgentState) -> AgentState:
     print("Start Searching From Reddit...")
 
     reddit_results = reddit_search_api(user_question)
-    print(f"Reddit search results: {reddit_results}")
     state['reddit_results'] = reddit_results
 
     return state
@@ -111,12 +114,16 @@ def analyze_reddit_post(state:AgentState) -> AgentState:
     
     structured_llm = llm.with_structured_output(RedditUrlAnanlysis)
 
-    messages = get_reddit_url_analysis_messages(user_question, reddit_results)
+    # reddit_results is a dict: {"parsed_data": [...], "total_found": N}
+    # Extract the list so the prompt receives a clean list of {title, url} dicts
+    reddit_posts_list = reddit_results.get("parsed_data", []) if isinstance(reddit_results, dict) else reddit_results
+
+    messages = get_reddit_url_analysis_messages(user_question, reddit_posts_list)
 
 
     try:
         analysis_result = structured_llm.invoke(messages)
-        selected_urls = analysis_result.selected_urls
+        selected_urls = analysis_result.selected_reddit_urls
 
         print("Selected Reddit URLs for analysis:")
         for i, url in enumerate(selected_urls):
@@ -210,7 +217,11 @@ def analyze_reddit_result(state:AgentState) -> AgentState:
     if not reddit_results:
         return state
 
-    messages = get_reddit_analysis_messages(user_question, reddit_results, reddit_post_data)
+    # Extract list of comments from the reddit_post_data dict
+    reddit_posts_list = reddit_results.get("parsed_data", []) if isinstance(reddit_results, dict) else reddit_results
+    reddit_comments_list = reddit_post_data.get("parsed_data", []) if isinstance(reddit_post_data, dict) else reddit_post_data
+
+    messages = get_reddit_analysis_messages(user_question, reddit_posts_list, reddit_comments_list)
 
     analysis = llm.invoke(messages)
 
@@ -300,7 +311,18 @@ def run_chat_bot():
         if user_input.lower() == "exit":
             break
 
-        initial_state = AgentState(messages=[HumanMessage(content=user_input)])
+        initial_state = AgentState(
+            messages=[HumanMessage(content=user_input)],
+            google_results=None,
+            bing_results=None,
+            reddit_results=None,
+            selected_reddit_urls=[],
+            reddit_post_data=None,
+            google_analysis=None,
+            bing_analysis=None,
+            reddit_analysis=None,
+            final_result=None,
+        )
 
         print("\nThinking...")
         final_state = app.invoke(initial_state)
